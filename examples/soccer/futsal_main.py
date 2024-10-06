@@ -317,6 +317,8 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[np.
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         crops += get_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
+    sv.plot_images_grid(crops[:50], grid_size=(10, 5))
+    print("here")
 
     team_classifier = TeamClassifier(device=device)
     team_classifier.fit(crops)
@@ -457,7 +459,6 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         crops += get_half_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
-
     team_classifier = TeamClassifier(device=device)
     team_classifier.fit(crops)
 
@@ -573,22 +574,26 @@ python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/o
 --target_video_path examples/soccer/data/output-radar.mp4 \
 --device mps --mode RADAR
 
-python -m examples.soccer.main --source_video_path examples/soccer/data/short_2e57b9_0.mp4 \
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_2e57b9_0.mp4 \
 --target_video_path examples/soccer/data/short_2e57b9_0-pitch-detection.mp4 \
 --device mps --mode PITCH_DETECTION
 
-python -m examples.soccer.main --source_video_path examples/soccer/data/output.mp4 \
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
 --target_video_path examples/soccer/data/output-pitch-detection.mp4 \
 --device mps --mode PITCH_DETECTION
 
 
 
-python -m examples.soccer.main --source_video_path examples/soccer/data/long_output.mp4 \
---target_video_path examples/soccer/data/long_output-player-detection.mp4 \
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
+--target_video_path examples/soccer/data/output-player-detection.mp4 \
 --device mps --mode PLAYER_DETECTION
 
 
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
+--target_video_path examples/soccer/data/output-team-classification.mp4 \
+--device mps --mode TEAM_CLASSIFICATION
+
 ffmpeg -ss 00:00:00 -to 00:00:01 -i 2e57b9_0.mp4 -c copy short_2e57b9_0.mp4
-ffmpeg -ss 00:01:00 -to 00:01:01 -i IMG_4856.MOV -c copy output.mp4
+ffmpeg -ss 00:02:00 -to 00:02:30 -i long_output.mp4 -c copy output.mp4
 
 """
