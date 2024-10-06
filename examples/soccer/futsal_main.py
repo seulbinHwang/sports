@@ -9,11 +9,14 @@ import supervision as sv
 from tqdm import tqdm
 from ultralytics import YOLO
 
-from sports.annotators.soccer import draw_pitch, draw_points_on_pitch
+from sports.annotators.futsal import draw_pitch, draw_points_on_pitch
 from sports.common.ball import BallTracker, BallAnnotator
 from sports.common.team import TeamClassifier
 from sports.common.view import ViewTransformer
-from sports.configs.soccer import SoccerPitchConfiguration
+from sports.configs.futsal import FutsalPitchConfiguration
+import numpy as np
+from matplotlib.widgets import Button
+import matplotlib.pyplot as plt
 
 # 현재 실행 중인 파이썬 파일이 속한 디렉토리의 절대 경로를 얻는 방법
 PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,7 +30,7 @@ PLAYER_CLASS_ID = 2
 REFEREE_CLASS_ID = 3
 
 STRIDE = 60
-CONFIG = SoccerPitchConfiguration()
+CONFIG = FutsalPitchConfiguration()
 
 COLORS = ['#FF1493', '#00BFFF', '#FF6347', '#FFD700']
 VERTEX_LABEL_ANNOTATOR = sv.VertexLabelAnnotator(
@@ -38,11 +41,11 @@ VERTEX_LABEL_ANNOTATOR = sv.VertexLabelAnnotator(
     text_scale=0.5,
     text_padding=5,
 )
-EDGE_ANNOTATOR = sv.EdgeAnnotator(
-    color=sv.Color.from_hex('#FF1493'),
-    thickness=2,
-    edges=CONFIG.edges,
-)
+# EDGE_ANNOTATOR = sv.EdgeAnnotator(
+#     color=sv.Color.from_hex('#FF1493'),
+#     thickness=2,
+#     edges=CONFIG.edges,
+# )
 TRIANGLE_ANNOTATOR = sv.TriangleAnnotator(
     color=sv.Color.from_hex('#FF1493'),
     base=20,
@@ -146,16 +149,16 @@ def render_radar(
     radar = draw_pitch(config=CONFIG)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 0],
-        face_color=sv.Color.from_hex(COLORS[0]), radius=20, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 1],
-        face_color=sv.Color.from_hex(COLORS[1]), radius=20, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 2],
-        face_color=sv.Color.from_hex(COLORS[2]), radius=20, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 3],
-        face_color=sv.Color.from_hex(COLORS[3]), radius=20, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
     return radar
 
 
@@ -323,6 +326,98 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[np.
             annotated_frame, detections, labels, custom_color_lookup=color_lookup)
         yield annotated_frame
 
+def get_17_points_from_image(image: np.ndarray) -> np.ndarray:
+    """
+    이미지(numpy 배열)를 GUI로 띄운 후, 사용자가 17개의 점을 클릭하여 좌표를 저장하는 함수.
+    각 점을 클릭할 때 몇 번째 점을 클릭하는지 GUI에 표시되며, 's' 키를 누르면 (-1., -1.) 좌표로 기록된다.
+    클릭한 점은 빨간색 점으로 시각화되며, 17개의 점 좌표를 얻으면 GUI가 종료되고, 좌표 배열을 반환한다.
+
+    Args:
+        image (np.ndarray): 입력 이미지(numpy 배열 형식).
+
+    Returns:
+        np.ndarray: (1, 17, 2) shape의 numpy 배열로 각 점의 좌표가 담긴다.
+    """
+    points = np.zeros((17, 2))  # 17개의 점을 저장할 배열
+    current_point = [0]  # 현재 몇 번째 점인지 저장 (리스트로 만든 이유는 nonlocal로 참조하기 위함)
+    skip_flag = [False]  # 's' 키가 눌렸는지 여부를 추적
+
+    def on_click(event):
+        """마우스 클릭 이벤트 핸들러로, 좌표를 기록."""
+        if current_point[0] < 17 and not skip_flag[0]:
+            points[current_point[0]] = [event.xdata, event.ydata]
+            ax.plot(event.xdata, event.ydata, 'ro')  # 빨간색 점을 찍음
+            current_point[0] += 1
+            update_title()
+            fig.canvas.draw()  # 화면 업데이트
+
+
+            if current_point[0] == 17:
+                plt.close()  # 17개의 점이 모두 찍히면 GUI 닫기
+        else:
+            skip_flag[0] = False  # 다음 클릭에서 정상적인 처리를 위해 플래그 초기화
+
+    def on_key_press(event):
+        """키보드 입력 이벤트 핸들러로, 'Enter' 키를 눌렀을 때 Skip 동작을 처리."""
+        if event.key == 'enter' and current_point[0] < 17:
+            points[current_point[0]] = [-1., -1.]
+            current_point[0] += 1
+
+            update_title()
+            fig.canvas.draw()  # 화면 업데이트
+
+
+            if current_point[0] == 17:
+                plt.close()  # 17개의 점이 모두 찍히면 GUI 닫기
+
+    def update_title():
+        """현재 몇 번째 점을 찍고 있는지 타이틀 업데이트."""
+        title.set_text(f'Time to click point {current_point[0]+1}/17 (Press \'s\' to skip)')
+
+    # GUI 창 띄우기
+    fig, ax = plt.subplots()
+    plt.subplots_adjust(bottom=0.2)  # 버튼 공간 확보를 위해 조정
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    ax.imshow(rgb_image)
+    title = ax.set_title('Time to click point 1/17 (Press \'s\' to skip)')
+
+    # 클릭 이벤트 연결
+    fig.canvas.mpl_connect('button_press_event', on_click)
+
+    # 키보드 이벤트 연결 ('s' 키로 skip 처리)
+    fig.canvas.mpl_connect('key_press_event', on_key_press)
+
+    plt.show()
+
+    # (1, 17, 2) shape으로 좌표 반환
+    return np.expand_dims(points, axis=0)
+
+
+def get_manual_keypoints(image: np.ndarray) -> sv.KeyPoints:
+    # xy = get_17_points_from_image(image)
+    xy = np.array([[[         -1    ,      -1],
+ [     13.048   ,   608.02],
+ [     86.597   ,   666.08],
+ [     162.08  ,    728.02],
+ [     640.15  ,    1078.3],
+ [         -1    ,      -1],
+ [         -1   ,       -1],
+ [     1102.7   ,   424.15],
+ [         -1   ,       -1],
+ [     1387.2   ,   418.34],
+ [     1849.8  ,    424.15],
+ [         -1    ,      -1],
+ [         -1    ,      -1],
+ [         -1    ,      -1],
+ [         -1    ,      -1],
+ [         -1    ,      -1],
+ [         -1    ,      -1]]
+])
+    class_id = np.array([0])
+    class_names = np.array(['pitch'])
+    data = { "class_name": class_names}
+
+    return sv.KeyPoints(xy, class_id, data=data)
 
 def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
@@ -341,9 +436,12 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
 
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
+    keypoints = None
     for frame in frame_generator:
-        result = pitch_detection_model(frame, verbose=False)[0]
-        keypoints = sv.KeyPoints.from_ultralytics(result)
+        # result = pitch_detection_model(frame, verbose=False)[0]
+        # keypoints = sv.KeyPoints.from_ultralytics(result)
+        if keypoints is None:
+            keypoints = get_manual_keypoints(frame)
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         detections = tracker.update_with_detections(detections)
@@ -444,7 +542,7 @@ python -m examples.soccer.main --source_video_path examples/soccer/data/short_2e
 --target_video_path examples/soccer/data/short_2e57b9_0-radar.mp4 \
 --device mps --mode RADAR
 
-python -m examples.soccer.main --source_video_path examples/soccer/data/output.mp4 \
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
 --target_video_path examples/soccer/data/output-radar.mp4 \
 --device mps --mode RADAR
 
