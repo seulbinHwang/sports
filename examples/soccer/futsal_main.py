@@ -100,6 +100,33 @@ def get_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
     return [sv.crop_image(frame, xyxy) for xyxy in detections.xyxy]
 
 
+def get_half_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
+    """
+    Extract upper half crops from the frame based on detected bounding boxes.
+
+    Args:
+        frame (np.ndarray): The frame from which to extract crops.
+        detections (sv.Detections): Detected objects with bounding boxes.
+
+    Returns:
+        List[np.ndarray]: List of cropped images (upper half of the bounding boxes).
+    """
+    crops = []
+    for xyxy in detections.xyxy:
+        x_min, y_min, x_max, y_max = xyxy
+
+        # Calculate mid-point of the bounding box height (for upper half)
+        mid_y = y_min + (y_max - y_min) // 2
+
+        # Update bounding box to only include the upper half
+        upper_half_box = np.array([x_min, y_min, x_max, mid_y])
+
+        # Crop the image using the updated bounding box (upper half)
+        crop = sv.crop_image(frame, upper_half_box)
+        crops.append(crop)
+
+    return crops
+
 def resolve_goalkeepers_team_id(
     players: sv.Detections,
     players_team_id: np.array,
@@ -429,7 +456,7 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
     for frame in tqdm(frame_generator, desc='collecting crops'):
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
-        crops += get_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
+        crops += get_half_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
 
     team_classifier = TeamClassifier(device=device)
     team_classifier.fit(crops)
@@ -447,7 +474,7 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
         detections = tracker.update_with_detections(detections)
 
         players = detections[detections.class_id == PLAYER_CLASS_ID]
-        crops = get_crops(frame, players)
+        crops = get_half_crops(frame, players)
         players_team_id = team_classifier.predict(crops)
 
         goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
