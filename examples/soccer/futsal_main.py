@@ -152,13 +152,13 @@ def render_radar(
         face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 1],
-        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[1]), radius=5, pitch=radar)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 2],
-        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[2]), radius=5, pitch=radar)
     radar = draw_points_on_pitch(
         config=CONFIG, xy=transformed_xy[color_lookup == 3],
-        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
+        face_color=sv.Color.from_hex(COLORS[3]), radius=5, pitch=radar)
     return radar
 
 
