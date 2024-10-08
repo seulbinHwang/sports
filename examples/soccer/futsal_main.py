@@ -594,6 +594,6 @@ python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/o
 --device mps --mode TEAM_CLASSIFICATION
 
 ffmpeg -ss 00:00:00 -to 00:00:01 -i 2e57b9_0.mp4 -c copy short_2e57b9_0.mp4
-ffmpeg -ss 00:02:00 -to 00:02:30 -i long_output.mp4 -c copy output.mp4
+ffmpeg -ss 00:02:00 -to 00:02:05 -i long_output.mp4 -c copy short_output.mp4
 
 """
