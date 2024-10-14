@@ -11,13 +11,18 @@ from ultralytics import YOLO
 
 from sports.annotators.futsal import draw_pitch, draw_points_on_pitch
 from sports.common.ball import BallTracker, BallAnnotator
-from sports.common.team import TeamClassifier
+from sports.common.team_mobile_clip import TeamClassifier
 from sports.common.view import ViewTransformer
 from sports.configs.futsal import FutsalPitchConfiguration
 import numpy as np
 from matplotlib.widgets import Button
 import matplotlib.pyplot as plt
+import time
 
+DETECTION_ELAPSED_TIME = 0
+tracking_elapsed_time = 0
+team_classifier_elapsed_time = 0
+render_elapsed_time = 0
 # 현재 실행 중인 파이썬 파일이 속한 디렉토리의 절대 경로를 얻는 방법
 PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLAYER_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-player-detection.pt')
@@ -205,7 +210,7 @@ def run_pitch_detection(source_video_path: str, device: str) -> Iterator[np.ndar
     for frame in frame_generator:
         result = pitch_detection_model(frame, verbose=False)[0]
         keypoints = sv.KeyPoints.from_ultralytics(result)
-
+        # key_points.xy.shape: (1, 32, 2) -> (1, 17, 2)
         annotated_frame = frame.copy()
         annotated_frame = VERTEX_LABEL_ANNOTATOR.annotate(
             annotated_frame, keypoints, CONFIG.labels)
@@ -312,26 +317,26 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[np.
     frame_generator = sv.get_video_frames_generator(
         source_path=source_video_path, stride=STRIDE)
 
-    crops = []
-    for frame in tqdm(frame_generator, desc='collecting crops'):
-        result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
-        crops += get_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
-    sv.plot_images_grid(crops[:50], grid_size=(10, 5))
-    print("here")
+    # crops = []
+    # for frame in tqdm(frame_generator, desc='collecting crops'):
+    #     result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
+    #     detections = sv.Detections.from_ultralytics(result)
+    #     crops += get_half_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
+    # sv.plot_images_grid(crops[:50], grid_size=(10, 5))
+    # print("here")
 
     team_classifier = TeamClassifier(device=device)
-    team_classifier.fit(crops)
-
+    # team_classifier.fit(crops)
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     for frame in frame_generator:
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         detections = tracker.update_with_detections(detections)
-
         players = detections[detections.class_id == PLAYER_CLASS_ID]
-        crops = get_crops(frame, players)
+        crop_start_time = time.time()
+        crops = get_half_crops(frame, players)
+        crop_elapsed_time = time.time() - crop_start_time
         players_team_id = team_classifier.predict(crops)
 
         goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
@@ -455,16 +460,21 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
         source_path=source_video_path, stride=STRIDE)
 
     crops = []
+    #####
+    team_classifier_start_time = time.time()
     for frame in tqdm(frame_generator, desc='collecting crops'):
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
         crops += get_half_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
     team_classifier = TeamClassifier(device=device)
     team_classifier.fit(crops)
+    print(f"Team classifier training time: {time.time() - team_classifier_start_time:.2f} seconds")
 
     frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     keypoints = None
+
+
     for frame in frame_generator:
         # result = pitch_detection_model(frame, verbose=False)[0]
         # keypoints = sv.KeyPoints.from_ultralytics(result)
@@ -472,9 +482,12 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
             keypoints = get_manual_keypoints(frame)
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
+
+
         detections = tracker.update_with_detections(detections)
 
         players = detections[detections.class_id == PLAYER_CLASS_ID]
+
         crops = get_half_crops(frame, players)
         players_team_id = team_classifier.predict(crops)
 
@@ -500,6 +513,7 @@ def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
             custom_color_lookup=color_lookup)
 
         h, w, _ = frame.shape
+
         radar = render_radar(detections, keypoints, color_lookup)
         radar = sv.resize_image(radar, (w // 2, h // 2))
         radar_h, radar_w, _ = radar.shape
@@ -536,15 +550,17 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
         raise NotImplementedError(f"Mode {mode} is not implemented.")
 
     video_info = sv.VideoInfo.from_video_path(source_video_path)
+    frame_number = 0
     with sv.VideoSink(target_video_path, video_info) as sink:
         for frame in frame_generator:
+            frame_number += 1
             sink.write_frame(frame)
 
-            cv2.imshow("frame", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+            # cv2.imshow("frame", frame)
+            # if cv2.waitKey(1) & 0xFF == ord("q"):
+            #     break
         cv2.destroyAllWindows()
-
+    print(f"Processed {frame_number} frames.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='')
@@ -553,47 +569,74 @@ if __name__ == '__main__':
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
     args = parser.parse_args()
+    srtart_time = time.time()
     main(
         source_video_path=args.source_video_path,
         target_video_path=args.target_video_path,
         device=args.device,
         mode=args.mode
     )
+    print(f"Elapsed time: {time.time() - srtart_time:.2f} seconds")
 
 """
 python main.py --source_video_path data/2e57b9_0.mp4 \
 --target_video_path data/2e57b9_0-radar.mp4 \
---device mps --mode RADAR
+--device cuda --mode RADAR
 
 
 python -m examples.soccer.main --source_video_path examples/soccer/data/short_2e57b9_0.mp4 \
 --target_video_path examples/soccer/data/short_2e57b9_0-radar.mp4 \
---device mps --mode RADAR
+--device cuda --mode RADAR
 
-python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
---target_video_path examples/soccer/data/output-radar.mp4 \
---device mps --mode RADAR
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-radar.mp4 \
+--device cuda:0 --mode RADAR
 
-python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_2e57b9_0.mp4 \
---target_video_path examples/soccer/data/short_2e57b9_0-pitch-detection.mp4 \
---device mps --mode PITCH_DETECTION
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/input.mp4 \
+--target_video_path examples/soccer/data/input-pitch-detection.mp4 \
+--device cuda --mode PITCH_DETECTION
 
-python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
---target_video_path examples/soccer/data/output-pitch-detection.mp4 \
---device mps --mode PITCH_DETECTION
-
-
-
-python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
---target_video_path examples/soccer/data/output-player-detection.mp4 \
---device mps --mode PLAYER_DETECTION
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-pitch-detection.mp4 \
+--device cuda:0 --mode PITCH_DETECTION
 
 
-python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/output.mp4 \
---target_video_path examples/soccer/data/output-team-classification.mp4 \
---device mps --mode TEAM_CLASSIFICATION
+
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-player-detection.mp4 \
+--device cuda:0 --mode PLAYER_DETECTION
+
+
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-team-classification.mp4 \
+--device cuda:0 --mode TEAM_CLASSIFICATION
 
 ffmpeg -ss 00:00:00 -to 00:00:01 -i 2e57b9_0.mp4 -c copy short_2e57b9_0.mp4
 ffmpeg -ss 00:02:00 -to 00:02:05 -i long_output.mp4 -c copy short_output.mp4
+
+
+ffmpeg -ss 00:00:00 -to 00:00:01 -i input.mp4 -c copy short_input.mp4
+
+--------------------------
+32 frame 
+
+총 소요 시간: 46.86 초 (1장당 1.46 초)
+
+detection: 3.69초 (1장당 0.115초)
+팀 구분 : 6.73초  (1장당 0.23초)
+
+6.42 (siglip)
+5.74 (mobile clip)
+
+
+------------------
+30초 영상 (900장)
+
+팀 구분:  94.43 초 -> 9.53 fps
+
+
+108.41 (siglip2)
+107.92 (siglip)
+
 
 """
