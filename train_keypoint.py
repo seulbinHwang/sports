@@ -21,10 +21,10 @@ tensorboard --logdir runs/pose/train6
 """
 
 
-TRAIN_MODE = False
+TRAIN_MODE = True
 if TRAIN_MODE:
     model = YOLO('yolov8x-pose.pt')
-    results = model.train(data='./test_dataset/data.yaml', epochs=125000, patience=125000000, imgsz=640, device='cuda:0', batch=4, mosaic=0.0, plots=True,)
+    results = model.train(data='./test_dataset2/data.yaml', epochs=125000, patience=125000000, imgsz=640, device='cuda:0', batch=4, mosaic=0.0, plots=True,)
 else:
     """
 앞의 13개는 "#FF1493"로 **분홍색(D eep Pink)**이고, 
@@ -53,7 +53,7 @@ else:
     model = YOLO('runs/pose/train7/weights/best.pt')  # 학습이 끝난 후의 모델 가중치 파일 경로
 
     # 테스트할 데이터셋의 경로 (학습 시 사용한 test 데이터 경로)
-    test_data = './test_dataset/train/images'  # test 이미지가 있는 경로로 수정
+    test_data = './test_dataset2/train/images'  # test 이미지가 있는 경로로 수정
 
     # 추론 실행
     results = model.predict(source=test_data, save=True, save_txt=True,
