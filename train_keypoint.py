@@ -24,7 +24,7 @@ tensorboard --logdir runs/pose/train6
 TRAIN_MODE = True
 if TRAIN_MODE:
     model = YOLO('yolov8x-pose.pt')
-    results = model.train(data='./test_dataset2/data.yaml', epochs=125000, patience=125000000, imgsz=640, device='cuda:0', batch=4, mosaic=0.0, plots=True,)
+    results = model.train(data='./test_dataset/data.yaml', epochs=125000, patience=125000000, imgsz=640, device='cpu', batch=4, mosaic=0.0, plots=True,)
 else:
     """
 앞의 13개는 "#FF1493"로 **분홍색(D eep Pink)**이고, 

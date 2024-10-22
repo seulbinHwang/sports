@@ -4,9 +4,7 @@ from typing import Iterator, List
 
 import os
 import cv2
-import numpy as np
 import supervision as sv
-from tqdm import tqdm
 from ultralytics import YOLO
 
 from sports.annotators.futsal import draw_pitch, draw_points_on_pitch
@@ -15,9 +13,10 @@ from sports.common.team_mobile_clip import TeamClassifier
 from sports.common.view import ViewTransformer
 from sports.configs.futsal import FutsalPitchConfiguration
 import numpy as np
-from matplotlib.widgets import Button
 import matplotlib.pyplot as plt
 import time
+from typing import Dict, List, Tuple, Union, Any, Optional
+from collections import defaultdict
 
 DETECTION_ELAPSED_TIME = 0
 tracking_elapsed_time = 0
@@ -25,19 +24,29 @@ team_classifier_elapsed_time = 0
 render_elapsed_time = 0
 # 현재 실행 중인 파이썬 파일이 속한 디렉토리의 절대 경로를 얻는 방법
 PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PLAYER_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-player-detection.pt')
-PITCH_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-pitch-detection.pt')
-BALL_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR, 'data/football-ball-detection.pt')
+PLAYER_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR,
+                                           'data/football-player-detection.pt')
+PITCH_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR,
+                                          'data/football-pitch-detection.pt')
+BALL_DETECTION_MODEL_PATH = os.path.join(PARENT_DIR,
+                                         'data/football-ball-detection.pt')
+USE_YOLO = True
 
-BALL_CLASS_ID = 0
 GOALKEEPER_CLASS_ID = 1
-PLAYER_CLASS_ID = 2
+if USE_YOLO:
+    BALL_CLASS_ID = 32
+    PLAYER_CLASS_ID = 0
+else:
+    BALL_CLASS_ID = 0
+    PLAYER_CLASS_ID = 2
 REFEREE_CLASS_ID = 3
 
+# Team ID tracking dictionary
 STRIDE = 60
 CONFIG = FutsalPitchConfiguration()
 
-COLORS = ['#FF1493', '#00BFFF', '#FF6347', '#FFD700']
+COLORS = ['#FF0000', '#00FF00', '#FFFFFF', '#000000']
+
 VERTEX_LABEL_ANNOTATOR = sv.VertexLabelAnnotator(
     color=[sv.Color.from_hex(color) for color in CONFIG.colors],
     text_color=sv.Color.from_hex('#FFFFFF'),
@@ -56,14 +65,10 @@ TRIANGLE_ANNOTATOR = sv.TriangleAnnotator(
     base=20,
     height=15,
 )
-BOX_ANNOTATOR = sv.BoxAnnotator(
-    color=sv.ColorPalette.from_hex(COLORS),
-    thickness=2
-)
-ELLIPSE_ANNOTATOR = sv.EllipseAnnotator(
-    color=sv.ColorPalette.from_hex(COLORS),
-    thickness=2
-)
+BOX_ANNOTATOR = sv.BoxAnnotator(color=sv.ColorPalette.from_hex(COLORS),
+                                thickness=2)
+ELLIPSE_ANNOTATOR = sv.EllipseAnnotator(color=sv.ColorPalette.from_hex(COLORS),
+                                        thickness=2)
 BOX_LABEL_ANNOTATOR = sv.LabelAnnotator(
     color=sv.ColorPalette.from_hex(COLORS),
     text_color=sv.Color.from_hex('#FFFFFF'),
@@ -72,7 +77,7 @@ BOX_LABEL_ANNOTATOR = sv.LabelAnnotator(
 )
 ELLIPSE_LABEL_ANNOTATOR = sv.LabelAnnotator(
     color=sv.ColorPalette.from_hex(COLORS),
-    text_color=sv.Color.from_hex('#FFFFFF'),
+    text_color=sv.Color.from_hex('#800080'),
     text_padding=5,
     text_thickness=1,
     text_position=sv.Position.BOTTOM_CENTER,
@@ -105,7 +110,8 @@ def get_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
     return [sv.crop_image(frame, xyxy) for xyxy in detections.xyxy]
 
 
-def get_half_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndarray]:
+def get_half_crops(frame: np.ndarray,
+                   detections: sv.Detections) -> List[np.ndarray]:
     """
     Extract upper half crops from the frame based on detected bounding boxes.
 
@@ -132,11 +138,10 @@ def get_half_crops(frame: np.ndarray, detections: sv.Detections) -> List[np.ndar
 
     return crops
 
-def resolve_goalkeepers_team_id(
-    players: sv.Detections,
-    players_team_id: np.array,
-    goalkeepers: sv.Detections
-) -> np.ndarray:
+
+def resolve_goalkeepers_team_id(players: sv.Detections,
+                                players_team_id: np.array,
+                                goalkeepers: sv.Detections) -> np.ndarray:
     """
     Resolve the team IDs for detected goalkeepers based on the proximity to team
     centroids.
@@ -153,7 +158,8 @@ def resolve_goalkeepers_team_id(
     the players. Then, it assigns each goalkeeper to the nearest team's centroid by
     calculating the distance between each goalkeeper and the centroids of the two teams.
     """
-    goalkeepers_xy = goalkeepers.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
+    goalkeepers_xy = goalkeepers.get_anchors_coordinates(
+        sv.Position.BOTTOM_CENTER)
     players_xy = players.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
     team_0_centroid = players_xy[players_team_id == 0].mean(axis=0)
     team_1_centroid = players_xy[players_team_id == 1].mean(axis=0)
@@ -165,36 +171,36 @@ def resolve_goalkeepers_team_id(
     return np.array(goalkeepers_team_id)
 
 
-def render_radar(
-    detections: sv.Detections,
-    keypoints: sv.KeyPoints,
-    color_lookup: np.ndarray
-) -> np.ndarray:
-    mask = (keypoints.xy[0][:, 0] > 1) & (keypoints.xy[0][:, 1] > 1)
-    transformer = ViewTransformer(
-        source=keypoints.xy[0][mask].astype(np.float32),
-        target=np.array(CONFIG.vertices)[mask].astype(np.float32)
-    )
-    xy = detections.get_anchors_coordinates(anchor=sv.Position.BOTTOM_CENTER)
-    transformed_xy = transformer.transform_points(points=xy)
-
+def render_radar(transformed_xy: np.ndarray,
+                 color_lookup: np.ndarray) -> np.ndarray:
     radar = draw_pitch(config=CONFIG)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 0],
-        face_color=sv.Color.from_hex(COLORS[0]), radius=5, pitch=radar)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 1],
-        face_color=sv.Color.from_hex(COLORS[1]), radius=5, pitch=radar)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 2],
-        face_color=sv.Color.from_hex(COLORS[2]), radius=5, pitch=radar)
-    radar = draw_points_on_pitch(
-        config=CONFIG, xy=transformed_xy[color_lookup == 3],
-        face_color=sv.Color.from_hex(COLORS[3]), radius=5, pitch=radar)
+
+    radar = draw_points_on_pitch(config=CONFIG,
+                                 xy=transformed_xy[color_lookup == 0],
+                                 face_color=sv.Color.from_hex(COLORS[0]),
+                                 radius=5,
+                                 pitch=radar)
+    radar = draw_points_on_pitch(config=CONFIG,
+                                 xy=transformed_xy[color_lookup == 1],
+                                 face_color=sv.Color.from_hex(COLORS[1]),
+                                 radius=5,
+                                 pitch=radar)
+    radar = draw_points_on_pitch(config=CONFIG,
+                                 xy=transformed_xy[color_lookup == 2],
+                                 face_color=sv.Color.from_hex(COLORS[2]),
+                                 radius=5,
+                                 pitch=radar)
+    # ball
+    radar = draw_points_on_pitch(config=CONFIG,
+                                 xy=transformed_xy[color_lookup == 3],
+                                 face_color=sv.Color.from_hex(COLORS[3]),
+                                 radius=5,
+                                 pitch=radar)
     return radar
 
 
-def run_pitch_detection(source_video_path: str, device: str) -> Iterator[np.ndarray]:
+def run_pitch_detection(source_video_path: str,
+                        device: str) -> Iterator[np.ndarray]:
     """
     Run pitch detection on a video and yield annotated frames.
 
@@ -206,7 +212,8 @@ def run_pitch_detection(source_video_path: str, device: str) -> Iterator[np.ndar
         Iterator[np.ndarray]: Iterator over annotated frames.
     """
     pitch_detection_model = YOLO(PITCH_DETECTION_MODEL_PATH).to(device=device)
-    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    frame_generator = sv.get_video_frames_generator(
+        source_path=source_video_path)
     for frame in frame_generator:
         result = pitch_detection_model(frame, verbose=False)[0]
         keypoints = sv.KeyPoints.from_ultralytics(result)
@@ -217,7 +224,8 @@ def run_pitch_detection(source_video_path: str, device: str) -> Iterator[np.ndar
         yield annotated_frame
 
 
-def run_player_detection(source_video_path: str, device: str) -> Iterator[np.ndarray]:
+def run_player_detection(source_video_path: str,
+                         device: str) -> Iterator[np.ndarray]:
     """
     Run player detection on a video and yield annotated frames.
 
@@ -228,19 +236,26 @@ def run_player_detection(source_video_path: str, device: str) -> Iterator[np.nda
     Yields:
         Iterator[np.ndarray]: Iterator over annotated frames.
     """
-    player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
-    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    if USE_YOLO:
+        player_detection_model = YOLO("yolo11x.pt").to(device=device)
+    else:
+        player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(
+            device=device)
+    frame_generator = sv.get_video_frames_generator(
+        source_path=source_video_path)
     for frame in frame_generator:
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
 
         annotated_frame = frame.copy()
         annotated_frame = BOX_ANNOTATOR.annotate(annotated_frame, detections)
-        annotated_frame = BOX_LABEL_ANNOTATOR.annotate(annotated_frame, detections)
+        annotated_frame = BOX_LABEL_ANNOTATOR.annotate(annotated_frame,
+                                                       detections)
         yield annotated_frame
 
 
-def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarray]:
+def run_ball_detection(source_video_path: str,
+                       device: str) -> Iterator[np.ndarray]:
     """
     Run ball detection on a video and yield annotated frames.
 
@@ -252,7 +267,8 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
         Iterator[np.ndarray]: Iterator over annotated frames.
     """
     ball_detection_model = YOLO(BALL_DETECTION_MODEL_PATH).to(device=device)
-    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    frame_generator = sv.get_video_frames_generator(
+        source_path=source_video_path)
     ball_tracker = BallTracker(buffer_size=20)
     ball_annotator = BallAnnotator(radius=6, buffer_size=10)
 
@@ -262,7 +278,7 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
 
     slicer = sv.InferenceSlicer(
         callback=callback,
-        overlap_filter_strategy=sv.OverlapFilter.NONE,
+        overlap_filter=sv.OverlapFilter.NONE,
         slice_wh=(640, 640),
     )
 
@@ -274,7 +290,8 @@ def run_ball_detection(source_video_path: str, device: str) -> Iterator[np.ndarr
         yield annotated_frame
 
 
-def run_player_tracking(source_video_path: str, device: str) -> Iterator[np.ndarray]:
+def run_player_tracking(source_video_path: str,
+                        device: str) -> Iterator[np.ndarray]:
     """
     Run player tracking on a video and yield annotated frames with tracked players.
 
@@ -286,7 +303,8 @@ def run_player_tracking(source_video_path: str, device: str) -> Iterator[np.ndar
         Iterator[np.ndarray]: Iterator over annotated frames.
     """
     player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
-    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    frame_generator = sv.get_video_frames_generator(
+        source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     for frame in frame_generator:
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
@@ -296,13 +314,16 @@ def run_player_tracking(source_video_path: str, device: str) -> Iterator[np.ndar
         labels = [str(tracker_id) for tracker_id in detections.tracker_id]
 
         annotated_frame = frame.copy()
-        annotated_frame = ELLIPSE_ANNOTATOR.annotate(annotated_frame, detections)
-        annotated_frame = ELLIPSE_LABEL_ANNOTATOR.annotate(
-            annotated_frame, detections, labels=labels)
+        annotated_frame = ELLIPSE_ANNOTATOR.annotate(annotated_frame,
+                                                     detections)
+        annotated_frame = ELLIPSE_LABEL_ANNOTATOR.annotate(annotated_frame,
+                                                           detections,
+                                                           labels=labels)
         yield annotated_frame
 
 
-def run_team_classification(source_video_path: str, device: str) -> Iterator[np.ndarray]:
+def run_team_classification(source_video_path: str,
+                            device: str) -> Iterator[np.ndarray]:
     """
     Run team classification on a video and yield annotated frames with team colors.
 
@@ -327,7 +348,8 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[np.
 
     team_classifier = TeamClassifier(device=device)
     # team_classifier.fit(crops)
-    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    frame_generator = sv.get_video_frames_generator(
+        source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     for frame in frame_generator:
         result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
@@ -346,19 +368,21 @@ def run_team_classification(source_video_path: str, device: str) -> Iterator[np.
         referees = detections[detections.class_id == REFEREE_CLASS_ID]
 
         detections = sv.Detections.merge([players, goalkeepers, referees])
-        color_lookup = np.array(
-                players_team_id.tolist() +
-                goalkeepers_team_id.tolist() +
-                [REFEREE_CLASS_ID] * len(referees)
-        )
+        color_lookup = np.array(players_team_id.tolist() +
+                                goalkeepers_team_id.tolist() +
+                                [REFEREE_CLASS_ID] * len(referees))
         labels = [str(tracker_id) for tracker_id in detections.tracker_id]
 
         annotated_frame = frame.copy()
         annotated_frame = ELLIPSE_ANNOTATOR.annotate(
             annotated_frame, detections, custom_color_lookup=color_lookup)
         annotated_frame = ELLIPSE_LABEL_ANNOTATOR.annotate(
-            annotated_frame, detections, labels, custom_color_lookup=color_lookup)
+            annotated_frame,
+            detections,
+            labels,
+            custom_color_lookup=color_lookup)
         yield annotated_frame
+
 
 def get_17_points_from_image(image: np.ndarray) -> np.ndarray:
     """
@@ -385,7 +409,6 @@ def get_17_points_from_image(image: np.ndarray) -> np.ndarray:
             update_title()
             fig.canvas.draw()  # 화면 업데이트
 
-
             if current_point[0] == 17:
                 plt.close()  # 17개의 점이 모두 찍히면 GUI 닫기
         else:
@@ -400,13 +423,14 @@ def get_17_points_from_image(image: np.ndarray) -> np.ndarray:
             update_title()
             fig.canvas.draw()  # 화면 업데이트
 
-
             if current_point[0] == 17:
                 plt.close()  # 17개의 점이 모두 찍히면 GUI 닫기
 
     def update_title():
         """현재 몇 번째 점을 찍고 있는지 타이틀 업데이트."""
-        title.set_text(f'Time to click point {current_point[0]+1}/17 (Press \'s\' to skip)')
+        title.set_text(
+            f'Time to click point {current_point[0]+1}/17 (Press \'s\' to skip)'
+        )
 
     # GUI 창 띄우기
     fig, ax = plt.subplots()
@@ -429,105 +453,111 @@ def get_17_points_from_image(image: np.ndarray) -> np.ndarray:
 
 def get_manual_keypoints(image: np.ndarray) -> sv.KeyPoints:
     # xy = get_17_points_from_image(image)
-    xy = np.array([[[         -1    ,      -1],
- [     13.048   ,   608.02],
- [     86.597   ,   666.08],
- [     162.08  ,    728.02],
- [     640.15  ,    1078.3],
- [         -1    ,      -1],
- [         -1   ,       -1],
- [     1102.7   ,   424.15],
- [         -1   ,       -1],
- [     1387.2   ,   418.34],
- [     1849.8  ,    424.15],
- [         -1    ,      -1],
- [         -1    ,      -1],
- [         -1    ,      -1],
- [         -1    ,      -1],
- [         -1    ,      -1],
- [         -1    ,      -1]]
-])
+    xy = np.array([[[-1, -1], [13.048, 608.02], [86.597, 666.08],
+                    [162.08, 728.02], [640.15, 1078.3], [-1, -1], [-1, -1],
+                    [1102.7, 424.15], [-1, -1], [1387.2, 418.34],
+                    [1849.8, 424.15], [-1, -1], [-1, -1], [-1, -1], [-1, -1],
+                    [-1, -1], [-1, -1]]])
     class_id = np.array([0])
     class_names = np.array(['pitch'])
-    data = { "class_name": class_names}
+    data = {"class_name": class_names}
 
     return sv.KeyPoints(xy, class_id, data=data)
 
+
 def run_radar(source_video_path: str, device: str) -> Iterator[np.ndarray]:
-    player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(device=device)
-    pitch_detection_model = YOLO(PITCH_DETECTION_MODEL_PATH).to(device=device)
-    frame_generator = sv.get_video_frames_generator(
-        source_path=source_video_path, stride=STRIDE)
-
-    crops = []
-    #####
-    team_classifier_start_time = time.time()
-    for frame in tqdm(frame_generator, desc='collecting crops'):
-        result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
-        crops += get_half_crops(frame, detections[detections.class_id == PLAYER_CLASS_ID])
+    if USE_YOLO:
+        player_detection_model = YOLO("yolo11x.pt").to(device=device)
+    else:
+        player_detection_model = YOLO(PLAYER_DETECTION_MODEL_PATH).to(
+            device=device)
+    # pitch_detection_model = YOLO(PITCH_DETECTION_MODEL_PATH).to(device=device)
     team_classifier = TeamClassifier(device=device)
-    team_classifier.fit(crops)
-    print(f"Team classifier training time: {time.time() - team_classifier_start_time:.2f} seconds")
 
-    frame_generator = sv.get_video_frames_generator(source_path=source_video_path)
+    frame_generator = sv.get_video_frames_generator(
+        source_path=source_video_path)
     tracker = sv.ByteTrack(minimum_consecutive_frames=3)
     keypoints = None
-
 
     for frame in frame_generator:
         # result = pitch_detection_model(frame, verbose=False)[0]
         # keypoints = sv.KeyPoints.from_ultralytics(result)
         if keypoints is None:
             keypoints = get_manual_keypoints(frame)
-        result = player_detection_model(frame, imgsz=1280, verbose=False)[0]
+        result = player_detection_model(frame,
+                                        classes = [PLAYER_CLASS_ID, BALL_CLASS_ID],
+                                        imgsz=1280, verbose=False)[0]
         detections = sv.Detections.from_ultralytics(result)
 
-
+        ########################
+        mask = (keypoints.xy[0][:, 0] > 1) & (keypoints.xy[0][:, 1] > 1)
+        transformer = ViewTransformer(
+            source=keypoints.xy[0][mask].astype(np.float32),
+            target=np.array(CONFIG.vertices)[mask].astype(np.float32))
+        xy = detections.get_anchors_coordinates(
+            anchor=sv.Position.BOTTOM_CENTER)
+        transformed_xy = transformer.transform_points(
+            points=xy)  # shape: (n_players, 2)
+        """
+        valid transformed_xy:  
+            if player, 0.0 <= x <= w, 0.0 <= y <= h is valid
+            else, all valid
+        """
+        h, w, _ = frame.shape
+        non_player_valid_mask = detections.class_id != PLAYER_CLASS_ID  # (n_players,)
+        x_limit = (CONFIG.length / 2)
+        y_limit = (CONFIG.width / 2)
+        player_valid_mask = (
+            (np.abs(transformed_xy[:, 0])<= x_limit) & (np.abs(transformed_xy[:, 1]) <= y_limit) &
+            (detections.class_id == PLAYER_CLASS_ID))  # (n_players,)
+        valid_mask = non_player_valid_mask | player_valid_mask  # (n_players,)
+        # remove invalid players from detections.
+        print("--------------------")
+        print("[before]detections:", detections.class_id, "len:", len(detections.class_id))
+        detections = detections[valid_mask]
+        print("[after]detections:", detections.class_id, "len:", len(detections.class_id))
         detections = tracker.update_with_detections(detections)
-
+        print("[track]detections:", detections.class_id, "len:", len(detections.class_id))
+        ########################
+        ball = detections[detections.class_id == BALL_CLASS_ID]
         players = detections[detections.class_id == PLAYER_CLASS_ID]
-
-        crops = get_half_crops(frame, players)
-        players_team_id = team_classifier.predict(crops)
-
-        goalkeepers = detections[detections.class_id == GOALKEEPER_CLASS_ID]
-        goalkeepers_team_id = resolve_goalkeepers_team_id(
-            players, players_team_id, goalkeepers)
-
-        referees = detections[detections.class_id == REFEREE_CLASS_ID]
-
-        detections = sv.Detections.merge([players, goalkeepers, referees])
-        color_lookup = np.array(
-            players_team_id.tolist() +
-            goalkeepers_team_id.tolist() +
-            [REFEREE_CLASS_ID] * len(referees)
-        )
+        player_crops = get_half_crops(frame, players)
+        players_team_id = team_classifier.predict(
+            player_crops)  # shape: (n_players,)
+        detections = sv.Detections.merge([players, ball])
+        xy = detections.get_anchors_coordinates(
+            anchor=sv.Position.BOTTOM_CENTER)
+        transformed_xy = transformer.transform_points(
+            points=xy)  # shape: (n_players, 2)
+        color_lookup = np.array(players_team_id.tolist() + [3] * len(ball))
         labels = [str(tracker_id) for tracker_id in detections.tracker_id]
 
         annotated_frame = frame.copy()
         annotated_frame = ELLIPSE_ANNOTATOR.annotate(
             annotated_frame, detections, custom_color_lookup=color_lookup)
         annotated_frame = ELLIPSE_LABEL_ANNOTATOR.annotate(
-            annotated_frame, detections, labels,
+            annotated_frame,
+            detections,
+            labels,
             custom_color_lookup=color_lookup)
-
         h, w, _ = frame.shape
 
-        radar = render_radar(detections, keypoints, color_lookup)
+        radar = render_radar(transformed_xy, color_lookup)
         radar = sv.resize_image(radar, (w // 2, h // 2))
         radar_h, radar_w, _ = radar.shape
-        rect = sv.Rect(
-            x=w // 2 - radar_w // 2,
-            y=h - radar_h,
-            width=radar_w,
-            height=radar_h
-        )
-        annotated_frame = sv.draw_image(annotated_frame, radar, opacity=0.5, rect=rect)
+        rect = sv.Rect(x=w // 2 - radar_w // 2,
+                       y=h - radar_h,
+                       width=radar_w,
+                       height=radar_h)
+        annotated_frame = sv.draw_image(annotated_frame,
+                                        radar,
+                                        opacity=0.5,
+                                        rect=rect)
         yield annotated_frame
 
 
-def main(source_video_path: str, target_video_path: str, device: str, mode: Mode) -> None:
+def main(source_video_path: str, target_video_path: str, device: str,
+         mode: Mode) -> None:
     if mode == Mode.PITCH_DETECTION:
         frame_generator = run_pitch_detection(
             source_video_path=source_video_path, device=device)
@@ -544,8 +574,8 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
         frame_generator = run_team_classification(
             source_video_path=source_video_path, device=device)
     elif mode == Mode.RADAR:
-        frame_generator = run_radar(
-            source_video_path=source_video_path, device=device)
+        frame_generator = run_radar(source_video_path=source_video_path,
+                                    device=device)
     else:
         raise NotImplementedError(f"Mode {mode} is not implemented.")
 
@@ -554,6 +584,7 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
     with sv.VideoSink(target_video_path, video_info) as sink:
         for frame in frame_generator:
             frame_number += 1
+            print(f"Frame {frame_number}")
             sink.write_frame(frame)
 
             # cv2.imshow("frame", frame)
@@ -562,22 +593,20 @@ def main(source_video_path: str, target_video_path: str, device: str, mode: Mode
         cv2.destroyAllWindows()
     print(f"Processed {frame_number} frames.")
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--source_video_path', type=str, required=True)
     parser.add_argument('--target_video_path', type=str, required=True)
     parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--mode', type=Mode, default=Mode.PLAYER_DETECTION)
+    parser.add_argument('--mode', type=Mode, default=Mode.RADAR)
     args = parser.parse_args()
     srtart_time = time.time()
-    main(
-        source_video_path=args.source_video_path,
-        target_video_path=args.target_video_path,
-        device=args.device,
-        mode=args.mode
-    )
+    main(source_video_path=args.source_video_path,
+         target_video_path=args.target_video_path,
+         device=args.device,
+         mode=args.mode)
     print(f"Elapsed time: {time.time() - srtart_time:.2f} seconds")
-
 """
 python main.py --source_video_path data/2e57b9_0.mp4 \
 --target_video_path data/2e57b9_0-radar.mp4 \
@@ -592,6 +621,10 @@ python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/s
 --target_video_path examples/soccer/data/short_input-radar.mp4 \
 --device cuda:0 --mode RADAR
 
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-radar.mp4 \
+--device mps --mode RADAR
+
 python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/input.mp4 \
 --target_video_path examples/soccer/data/input-pitch-detection.mp4 \
 --device cuda --mode PITCH_DETECTION
@@ -601,21 +634,36 @@ python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/s
 --device cuda:0 --mode PITCH_DETECTION
 
 
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-ball.mp4 \
+--device mps --mode BALL_DETECTION
+
 
 python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
 --target_video_path examples/soccer/data/short_input-player-detection.mp4 \
 --device cuda:0 --mode PLAYER_DETECTION
 
+python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
+--target_video_path examples/soccer/data/short_input-player-detection.mp4 \
+--device mps --mode PLAYER_DETECTION
 
 python -m examples.soccer.futsal_main --source_video_path examples/soccer/data/short_input.mp4 \
 --target_video_path examples/soccer/data/short_input-team-classification.mp4 \
 --device cuda:0 --mode TEAM_CLASSIFICATION
 
-ffmpeg -ss 00:00:00 -to 00:00:01 -i 2e57b9_0.mp4 -c copy short_2e57b9_0.mp4
+ffmpeg -ss 00:00:22 -to 00:00:30 -i vlog.mp4 -c copy short_vlog.mp4
 ffmpeg -ss 00:02:00 -to 00:02:05 -i long_output.mp4 -c copy short_output.mp4
 
 
 ffmpeg -ss 00:00:00 -to 00:00:01 -i input.mp4 -c copy short_input.mp4
+
+
+ffmpeg -i 1.MOV -vf "fps=3" new/1_%04d.jpg
+ffmpeg -i 2.MOV -vf "fps=3" new/2_%04d.jpg
+ffmpeg -i 3.MOV -vf "fps=3" new/3_%04d.jpg
+ffmpeg -i 4.MOV -vf "fps=3" new/4_%04d.jpg
+ffmpeg -i 5.MOV -vf "fps=3" new/5_%04d.jpg
+
 
 --------------------------
 32 frame 

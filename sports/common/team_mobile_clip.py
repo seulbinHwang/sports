@@ -51,7 +51,7 @@ class TeamClassifier:
         self.model.half()  # 모델을 half precision으로 변환
 
         # 텍스트 특징을 한 번만 계산하여 저장
-        candidate_labels = ["red vest", "green vest", "white vest"]
+        candidate_labels = ["red vest", "yellow vest", "white vest"]
         texts = self.tokenizer([f'This is a photo of {label}.' for label in candidate_labels])
 
         with torch.no_grad():
