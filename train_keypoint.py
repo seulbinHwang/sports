@@ -5,7 +5,6 @@ import supervision as sv
 from typing import List
 from dataclasses import dataclass, field
 import cv2
-
 """
 yolov8n-pose.pt 
 yolov8s-pose.pt 
@@ -20,11 +19,19 @@ tensorboard --logdir runs/pose/train6
 
 """
 
-
 TRAIN_MODE = True
 if TRAIN_MODE:
     model = YOLO('yolov8x-pose.pt')
-    results = model.train(data='./test_dataset/data.yaml', epochs=125000, patience=125000000, imgsz=640, device='cpu', batch=4, mosaic=0.0, plots=True,)
+    results = model.train(
+        data='./test_dataset/data.yaml',
+        epochs=125000,
+        patience=125000000,
+        imgsz=640,
+        device='cpu',
+        batch=4,
+        mosaic=0.0,
+        plots=True,
+    )
 else:
     """
 앞의 13개는 "#FF1493"로 **분홍색(D eep Pink)**이고, 
@@ -38,15 +45,15 @@ else:
 
     VERTEX_LABEL_ANNOTATOR = sv.VertexLabelAnnotator(
         color=[sv.Color.from_hex(color) for color in colors],
-        text_color=sv.Color.from_hex('#FFFFFF'), # white
+        text_color=sv.Color.from_hex('#FFFFFF'),  # white
         border_radius=5,
         text_thickness=1,
         text_scale=0.5,
         text_padding=5,
     )
     labels: List[str] = [
-        "01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
-        "11", "12", "13", "14", "15", "16"
+        "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12",
+        "13", "14", "15", "16"
     ]
 
     # 모델 로드 (학습한 가중치가 저장된 모델 경로를 사용)
@@ -56,12 +63,16 @@ else:
     test_data = './test_dataset2/train/images'  # test 이미지가 있는 경로로 수정
 
     # 추론 실행
-    results = model.predict(source=test_data, save=True, save_txt=True,
-                            imgsz=640, conf=0.1,
-                            )
+    results = model.predict(
+        source=test_data,
+        save=True,
+        save_txt=True,
+        imgsz=640,
+        conf=0.1,
+    )
     for a_result in results:
         keypoints = sv.KeyPoints.from_ultralytics(a_result)
-        print("keypoints.xy.shape:", keypoints.xy.shape) # (3, 16, 2)
+        print("keypoints.xy.shape:", keypoints.xy.shape)  # (3, 16, 2)
         annotated_frame = a_result.orig_img
         annotated_frame = VERTEX_LABEL_ANNOTATOR.annotate(
             annotated_frame, keypoints, labels)
