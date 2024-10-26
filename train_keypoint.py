@@ -27,20 +27,29 @@ if TRAIN_MODE:
         epochs=125000,
         patience=125000000,
         imgsz=640,
-        device='cpu',
-        batch=4,
+        device='cuda',
+        batch=6,
         mosaic=0.0,
         plots=True,
     )
 else:
-    """
-앞의 13개는 "#FF1493"로 **분홍색(D eep Pink)**이고, 
-뒤의 4개는 "#00BFFF"로 **파란색(Deep Sky Blue)**이야.
-    """
     colors: List[str] = [
-        "#FF1493", "#FF1493", "#FF1493", "#FF1493", "#FF1493", "#FF1493",
-        "#FF1493", "#FF1493", "#FF1493", "#FF1493", "#FF1493", "#FF1493",
-        "#FF1493", "#00BFFF", "#00BFFF", "#00BFFF"
+        "#FFA500",
+        "#FFA500",
+        "#FFA500",
+        "#FFA500",
+        "#FFA500",
+        "#FFA500",  # 주황색 (6개)
+        "#FF0000",
+        "#FF0000",
+        "#FF0000",
+        "#FF0000",  # 빨간색 (4개)
+        "#87CEEB",
+        "#87CEEB",
+        "#87CEEB",
+        "#87CEEB",
+        "#87CEEB",
+        "#87CEEB"  # 하늘색 (6개)
     ]
 
     VERTEX_LABEL_ANNOTATOR = sv.VertexLabelAnnotator(
@@ -60,7 +69,7 @@ else:
     model = YOLO('runs/pose/train7/weights/best.pt')  # 학습이 끝난 후의 모델 가중치 파일 경로
 
     # 테스트할 데이터셋의 경로 (학습 시 사용한 test 데이터 경로)
-    test_data = './test_dataset2/train/images'  # test 이미지가 있는 경로로 수정
+    test_data = './test_dataset2/test/images'  # test 이미지가 있는 경로로 수정
 
     # 추론 실행
     results = model.predict(
@@ -76,6 +85,19 @@ else:
         annotated_frame = a_result.orig_img
         annotated_frame = VERTEX_LABEL_ANNOTATOR.annotate(
             annotated_frame, keypoints, labels)
+
+        # Bounding box visualization 추가 부분
+        for box in a_result.boxes:
+            # box.xyxy는 bounding box의 좌표 (x1, y1, x2, y2)를 포함함
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            confidence = box.conf[0]  # confidence score
+            label = f"{box.cls} {confidence:.2f}"
+
+            # bounding box 그리기
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0),
+                          2)  # 초록색 박스
+            cv2.putText(annotated_frame, label, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         cv2.imshow("frame", annotated_frame)
 
